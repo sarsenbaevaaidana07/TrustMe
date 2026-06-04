@@ -1,10 +1,5 @@
 """
 bot.py — Telegram-бот TeamTrustGate.
-
-Исправления:
-  Fix 4 (строки 136, 170): safe_float для confidence вместо float()
-  Fix 5 (строка 136):      Markdown parse_mode через Defaults
-  Fix 6 (строка 285):      concurrent_updates=True для параллельной обработки
 """
 
 import os
@@ -32,14 +27,34 @@ from prompts import EXTRACTION_PROMPT
 logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────────────────
-# Зависимости (инициализируются один раз при старте)
+# Читаем переменные — поддерживаем оба варианта названий
 # ──────────────────────────────────────────────────────────────────
 
-llm = LLMAdapter(api_key=os.environ.get("LLM_API_KEY") or os.environ.get("OPENAI_API_KEY") or "")
-jira = JiraClient(
-    base_url=os.environ["JIRA_URL"],
-    token=os.environ["JIRA_API_TOKEN"],
+LLM_API_KEY = (
+    os.environ.get("LLM_API_KEY")
+    or os.environ.get("OPENAI_API_KEY")
+    or ""
 )
+JIRA_BASE_URL = (
+    os.environ.get("JIRA_BASE_URL")
+    or os.environ.get("JIRA_URL")
+    or ""
+)
+JIRA_TOKEN = (
+    os.environ.get("JIRA_TOKEN")
+    or os.environ.get("JIRA_API_TOKEN")
+    or ""
+)
+
+if not LLM_API_KEY:
+    raise RuntimeError("Нет LLM ключа: задайте LLM_API_KEY или OPENAI_API_KEY в Variables")
+if not JIRA_BASE_URL:
+    raise RuntimeError("Нет JIRA URL: задайте JIRA_BASE_URL или JIRA_URL в Variables")
+if not JIRA_TOKEN:
+    raise RuntimeError("Нет JIRA токена: задайте JIRA_TOKEN или JIRA_API_TOKEN в Variables")
+
+llm = LLMAdapter(api_key=LLM_API_KEY)
+jira = JiraClient(base_url=JIRA_BASE_URL, token=JIRA_TOKEN)
 scorer = Scorer(llm, product_strategy=os.environ.get("PRODUCT_STRATEGY", ""))
 deduplicator = Deduplicator(llm)
 
@@ -57,7 +72,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_text = update.message.text
-    chat_id = update.effective_chat.id
 
     # 1. Extraction
     extraction_prompt = EXTRACTION_PROMPT.format(
@@ -73,14 +87,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("❌ Не смог разобрать ответ модели. Попробуйте ещё раз.")
         return
 
-    # Отклонение
     if analysis.get("should_reject"):
         await update.message.reply_text(
             f"ℹ️ {analysis.get('reject_reason', 'Запрос отклонён.')}"
         )
         return
 
-    # Уточняющий вопрос
     if analysis.get("missing_info"):
         question = analysis["missing_info"][0]
         context.user_data["collected_answers"] = user_text
@@ -89,13 +101,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     context.user_data.pop("collected_answers", None)
 
-    # ──────────────────────────────────────────────────────────────
-    # БЫЛО (строка 136):
-    #   confidence = float(analysis.get("confidence", 0))
-    #   # ❌ падало если модель вернула "0.75 (high)" и т.п.
-    #
-    # СТАЛО:
-    # ──────────────────────────────────────────────────────────────
     confidence = safe_float(analysis.get("confidence"), default=0.0)
 
     # 2. Дедупликация
@@ -121,19 +126,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # 3. Скоринг
     scoring = await scorer.score(analysis)
 
-    # ──────────────────────────────────────────────────────────────
-    # БЫЛО (строка 170):
-    #   confidence = float(analysis.get("confidence", 0))  # дублировалось
-    # СТАЛО: переиспользуем уже вычисленный safe_float выше
-    # ──────────────────────────────────────────────────────────────
-
     # 4. Создание тикета
-    priority_map = {
-        "Highest": "Highest",
-        "High": "High",
-        "Medium": "Medium",
-        "Low": "Low",
-    }
+    priority_map = {"Highest": "Highest", "High": "High", "Medium": "Medium", "Low": "Low"}
     jira_payload = {
         "fields": {
             "project": {"key": "TTG"},
@@ -141,17 +135,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "description": {
                 "type": "doc",
                 "version": 1,
-                "content": [
-                    {
-                        "type": "paragraph",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": scoring["justification"],
-                            }
-                        ],
-                    }
-                ],
+                "content": [{"type": "paragraph", "content": [{"type": "text", "text": scoring["justification"]}]}],
             },
             "issuetype": {"name": "Story"},
             "priority": {"name": priority_map.get(scoring["priority"], "Medium")},
@@ -178,23 +162,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 # ──────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    token = os.environ["TELEGRAM_BOT_TOKEN"]
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    if not token:
+        raise RuntimeError("Нет TELEGRAM_BOT_TOKEN в Variables")
 
-    # Fix 4: Markdown рендерится через Defaults — не нужно указывать
-    #        parse_mode в каждом reply_text вручную.
-    # БЫЛО:  Application.builder().token(token).build()
-    # СТАЛО:
     defaults = Defaults(parse_mode=ParseMode.MARKDOWN_V2)
-
-    # Fix 6: concurrent_updates=True — апдейты обрабатываются параллельно.
-    # БЫЛО:  Application.builder().token(token).build()
-    #        (последовательная обработка по умолчанию)
-    # СТАЛО:
     app = (
         Application.builder()
         .token(token)
         .defaults(defaults)
-        .concurrent_updates(True)   # ← параллельная обработка
+        .concurrent_updates(True)
         .build()
     )
 
