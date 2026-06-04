@@ -54,7 +54,11 @@ if not JIRA_TOKEN:
     raise RuntimeError("Нет JIRA токена: задайте JIRA_TOKEN или JIRA_API_TOKEN в Variables")
 
 llm = LLMAdapter(api_key=LLM_API_KEY)
-jira = JiraClient(base_url=JIRA_BASE_URL, token=JIRA_TOKEN)
+jira = JiraClient(
+    base_url=JIRA_BASE_URL,
+    token=JIRA_TOKEN,
+    email=os.environ.get("JIRA_EMAIL", ""),
+)
 scorer = Scorer(llm, product_strategy=os.environ.get("PRODUCT_STRATEGY", ""))
 deduplicator = Deduplicator(llm)
 
