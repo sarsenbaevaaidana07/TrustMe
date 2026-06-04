@@ -109,7 +109,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # 2. Дедупликация
     candidates = await jira.search_issues(
-        jql='project = TTG AND status != Done ORDER BY created DESC',
+        jql='project = SCRUM AND status != Done ORDER BY created DESC',
         max_results=50,
     )
     candidate_summaries = [
@@ -134,7 +134,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     priority_map = {"Highest": "Highest", "High": "High", "Medium": "Medium", "Low": "Low"}
     jira_payload = {
         "fields": {
-            "project": {"key": "TTG"},
+            "project": {"key": "SCRUM"},
             "summary": analysis["problem_statement"][:200],
             "description": {
                 "type": "doc",
