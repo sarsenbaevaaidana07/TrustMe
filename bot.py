@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 # Зависимости (инициализируются один раз при старте)
 # ──────────────────────────────────────────────────────────────────
 
-llm = LLMAdapter(api_key=os.environ["OPENAI_API_KEY"])
+llm = LLMAdapter(api_key=os.environ["LLM_API_KEY"])
 jira = JiraClient(
     base_url=os.environ["JIRA_BASE_URL"],
     token=os.environ["JIRA_TOKEN"],
