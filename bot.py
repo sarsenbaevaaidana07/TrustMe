@@ -37,8 +37,8 @@ logger = logging.getLogger(__name__)
 
 llm = LLMAdapter(api_key=os.environ["LLM_API_KEY"])
 jira = JiraClient(
-    base_url=os.environ["JIRA_BASE_URL"],
-    token=os.environ["JIRA_TOKEN"],
+    base_url=os.environ["JIRA_URL"],
+    token=os.environ["JIRA_API_TOKEN"],
 )
 scorer = Scorer(llm, product_strategy=os.environ.get("PRODUCT_STRATEGY", ""))
 deduplicator = Deduplicator(llm)
