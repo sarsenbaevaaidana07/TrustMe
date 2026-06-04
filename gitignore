@@ -1,0 +1,13 @@
+# Секретные ключи — НИКОГДА не заливать в git!
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
