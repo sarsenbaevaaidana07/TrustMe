@@ -1,36 +1,32 @@
 """
 jira_client.py — клиент Jira с circuit breaker.
-Fix: datetime арифметика через timedelta (было: .replace(minute=...) → ошибка на 55-59 мин).
+Fix: Basic Auth (email:token) вместо Bearer токена.
 """
 
-import asyncio
 import httpx
+import os
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+import base64
 
 
 class JiraClient:
     CIRCUIT_OPEN_DURATION = timedelta(minutes=5)
     MAX_FAILURES = 5
 
-    def __init__(self, base_url: str, token: str):
+    def __init__(self, base_url: str, token: str, email: str = ""):
         self.base_url = base_url.rstrip("/")
         self.token = token
+        self.email = email or os.environ.get("JIRA_EMAIL", "")
         self._failure_count = 0
         self._circuit_open_until: Optional[datetime] = None
 
-    # ──────────────────────────────────────────────────────────────────
-    # БЫЛО (строка 41):
-    #
-    # self._circuit_open_until = datetime.now(timezone.utc).replace(
-    #     minute=datetime.now(timezone.utc).minute + 5   # ❌ взрывается на 55-59
-    # )
-    #
-    # СТАЛО:
-    # ──────────────────────────────────────────────────────────────────
+        # Basic Auth: base64(email:token)
+        credentials = f"{self.email}:{self.token}"
+        encoded = base64.b64encode(credentials.encode()).decode()
+        self._auth_header = f"Basic {encoded}"
 
     def _open_circuit(self) -> None:
-        """Открывает circuit breaker на CIRCUIT_OPEN_DURATION."""
         self._circuit_open_until = datetime.now(timezone.utc) + self.CIRCUIT_OPEN_DURATION
 
     def _is_circuit_open(self) -> bool:
@@ -38,7 +34,6 @@ class JiraClient:
             return False
         if datetime.now(timezone.utc) < self._circuit_open_until:
             return True
-        # Автоматически сбрасываем после истечения времени
         self._circuit_open_until = None
         self._failure_count = 0
         return False
@@ -51,10 +46,6 @@ class JiraClient:
     def _record_success(self) -> None:
         self._failure_count = 0
         self._circuit_open_until = None
-
-    # ──────────────────────────────────────────────────────────────────
-    # Основные методы клиента
-    # ──────────────────────────────────────────────────────────────────
 
     async def create_issue(self, payload: dict) -> dict:
         if self._is_circuit_open():
@@ -70,7 +61,7 @@ class JiraClient:
                     f"{self.base_url}/rest/api/3/issue",
                     json=payload,
                     headers={
-                        "Authorization": f"Bearer {self.token}",
+                        "Authorization": self._auth_header,
                         "Content-Type": "application/json",
                     },
                 )
@@ -83,14 +74,14 @@ class JiraClient:
 
     async def search_issues(self, jql: str, max_results: int = 50) -> list[dict]:
         if self._is_circuit_open():
-            return []  # Graceful degradation: дедупликация пропускается
+            return []
 
         async with httpx.AsyncClient(timeout=10.0) as client:
             try:
                 resp = await client.get(
                     f"{self.base_url}/rest/api/3/search",
                     params={"jql": jql, "maxResults": max_results},
-                    headers={"Authorization": f"Bearer {self.token}"},
+                    headers={"Authorization": self._auth_header},
                 )
                 resp.raise_for_status()
                 self._record_success()
